@@ -33,8 +33,8 @@ class GenerateImageRequest(BaseModel):
     prompt: str = Field(..., max_length=4000, description="Text description of the image to generate")
     model: str = Field(
         default="gemini",
-        pattern="^(gemini|gemini-pro|dall-e-3|gpt-image-1)$",
-        description="Model: gemini (fast, free), gemini-pro (high quality, free), dall-e-3 (artistic), gpt-image-1 (precise)",
+        pattern="^(gemini|gemini-pro|gpt-image-1)$",
+        description="Model: gemini (fast, free), gemini-pro (high quality, free), gpt-image-1 (OpenAI, paid, precise)",
     )
     aspect_ratio: str = Field(
         default="1:1",
@@ -80,8 +80,6 @@ async def generate_image(request: GenerateImageRequest) -> GenerateImageResponse
         return await _generate_gemini(request)
     elif request.model == "gemini-pro":
         return await _generate_gemini(request, pro=True)
-    elif request.model == "dall-e-3":
-        return await _generate_dalle3(request)
     elif request.model == "gpt-image-1":
         return await _generate_gpt_image(request)
     else:
@@ -153,76 +151,6 @@ async def _generate_gemini(req: GenerateImageRequest, pro: bool = False) -> Gene
 
     raise HTTPException(status_code=502, detail="All Gemini models returned 404. Models tried: " + ", ".join(models))
 
-
-async def _generate_dalle3(req: GenerateImageRequest) -> GenerateImageResponse:
-    """Generate via OpenAI DALL-E 3. Falls back to gpt-image-1 if DALL-E 3 scope is missing."""
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
-
-    size_map = {
-        "1:1": "1024x1024",
-        "16:9": "1792x1024",
-        "9:16": "1024x1792",
-        "4:3": "1792x1024",
-        "3:4": "1024x1792",
-        "3:2": "1792x1024",
-        "2:3": "1024x1792",
-    }
-    size = size_map.get(req.aspect_ratio, req.size)
-
-    quality_map = {"auto": "standard", "high": "hd", "hd": "hd"}
-    quality = quality_map.get(req.quality, "standard")
-
-    payload = {
-        "model": "dall-e-3",
-        "prompt": req.prompt,
-        "n": 1,
-        "size": size,
-        "quality": quality,
-        "response_format": "b64_json",
-    }
-    if req.style:
-        payload["style"] = req.style
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/images/generations",
-            json=payload,
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        )
-
-        # If dall-e-3 fails with permissions, fall back to gpt-image-1
-        if resp.status_code == 403 or (resp.status_code != 200 and "insufficient permissions" in resp.text.lower()):
-            req_copy = req.model_copy()
-            req_copy.model = "gpt-image-1"
-            result = await _generate_gpt_image(req_copy)
-            result.model = "gpt-image-1 (dall-e-3 unavailable — API key lacks model.request scope)"
-            return result
-
-        if resp.status_code != 200:
-            detail = resp.text[:500]
-            raise HTTPException(status_code=502, detail=f"DALL-E API error: {detail}")
-
-        data = resp.json()
-
-    image_data = data["data"][0]
-    image_b64 = image_data["b64_json"]
-    revised_prompt = image_data.get("revised_prompt")
-
-    image_bytes = base64.b64decode(image_b64)
-    from PIL import Image as PILImage
-    img = PILImage.open(BytesIO(image_bytes))
-
-    kiosk_url = await upload_to_kiosk(image_bytes, "generated-dalle3.png", "image/png")
-
-    return GenerateImageResponse(
-        url=kiosk_url,
-        image_base64=image_b64 if not kiosk_url else None,
-        model="dall-e-3",
-        revised_prompt=revised_prompt,
-        width=img.width,
-        height=img.height,
-    )
 
 
 async def _generate_gpt_image(req: GenerateImageRequest) -> GenerateImageResponse:
