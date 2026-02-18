@@ -74,6 +74,69 @@ async def upload_image(request: UploadRequest) -> UploadResponse:
 
 
 # ---------------------------------------------------------------------------
+# /image/trace — bitmap to SVG vectorization
+# ---------------------------------------------------------------------------
+
+class TraceRequest(BaseModel):
+    image_base64: Optional[str] = Field(None, description="Base64-encoded input image")
+    image_url: Optional[str] = Field(None, description="URL to download input image from")
+    color_mode: str = Field(default="color", pattern="^(color|binary)$", description="Trace mode: color (multi-color) or binary (black/white)")
+    filter_speckle: int = Field(default=4, ge=0, le=100, description="Noise removal (higher = cleaner, fewer details)")
+    color_precision: int = Field(default=6, ge=1, le=12, description="Color layers (lower = simpler SVG, fewer colors)")
+    corner_threshold: int = Field(default=60, ge=0, le=180, description="Corner detection angle (higher = more corners, less smoothing)")
+    path_precision: int = Field(default=3, ge=0, le=10, description="Decimal precision for path coordinates")
+    mode: str = Field(default="spline", pattern="^(spline|polygon|none)$", description="Path fitting: spline (smooth curves), polygon (straight edges), none (pixel)")
+
+
+class TraceResponse(BaseModel):
+    url: Optional[str] = Field(None, description="Kiosk URL for SVG file")
+    svg: Optional[str] = Field(None, description="SVG string (fallback when no Kiosk)")
+    width: int
+    height: int
+    size_bytes: int
+
+
+@router.post("/trace", response_model=TraceResponse)
+async def trace_image(request: TraceRequest) -> TraceResponse:
+    """Convert a bitmap image (PNG/JPEG) to SVG vector format using path tracing."""
+    import vtracer
+    import uuid
+
+    try:
+        raw = await resolve_image_bytes(request.image_base64, request.image_url)
+
+        svg_str = vtracer.convert_raw_image_to_svg(
+            raw,
+            img_format="png",
+            colormode=request.color_mode,
+            filter_speckle=request.filter_speckle,
+            color_precision=request.color_precision,
+            corner_threshold=request.corner_threshold,
+            path_precision=request.path_precision,
+            mode=request.mode,
+        )
+
+        svg_bytes = svg_str.encode("utf-8")
+
+        # Get dimensions from source image
+        from PIL import Image as PILImage
+        from io import BytesIO
+        img = PILImage.open(BytesIO(raw))
+
+        kiosk_url = await upload_to_kiosk(svg_bytes, f"traced-{uuid.uuid4().hex[:8]}.svg", "image/svg+xml")
+
+        return TraceResponse(
+            url=kiosk_url,
+            svg=svg_str if not kiosk_url else None,
+            width=img.width,
+            height=img.height,
+            size_bytes=len(svg_bytes),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Trace failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Shared base models
 # ---------------------------------------------------------------------------
 
