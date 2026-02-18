@@ -50,27 +50,57 @@ async def upload_image(request: UploadRequest) -> UploadResponse:
     """
     try:
         image_bytes = decode_base64_image(request.image_base64)
-
-        # Detect format for mime type
-        from PIL import Image as PILImage
-        from io import BytesIO
-        img = PILImage.open(BytesIO(image_bytes))
-        fmt = (img.format or "PNG").lower()
-        mime = FORMAT_MIMETYPES.get(fmt, "image/png")
-        ext = fmt if fmt != "jpeg" else "jpg"
-
-        import uuid
-        filename = request.filename or f"upload-{uuid.uuid4().hex[:8]}.{ext}"
-
-        url = await upload_to_kiosk(image_bytes, filename, mime, request.bucket)
-        if not url:
-            raise HTTPException(status_code=500, detail="Kiosk not configured (KIOSK_UPLOAD_URL / KIOSK_API_KEY)")
-
-        return UploadResponse(url=url, filename=filename, bucket=request.bucket)
+        return await _upload_bytes_to_kiosk(image_bytes, request.filename, request.bucket)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {e}")
+
+
+from fastapi import File, UploadFile, Form
+
+
+@router.post("/upload-file", response_model=UploadResponse)
+async def upload_file(
+    file: UploadFile = File(..., description="Image file (multipart upload)"),
+    bucket: str = Form(default="temp", description="Kiosk bucket: temp, public, restricted"),
+    filename: Optional[str] = Form(default=None, description="Override filename"),
+) -> UploadResponse:
+    """
+    Upload an image file directly (multipart form data) to Kiosk.
+    Use this for large files that exceed base64 parameter limits.
+
+    curl example:
+      curl -X POST https://python-worker-0h8m.onrender.com/image/upload-file \\
+        -F "file=@/path/to/image.png" -F "bucket=temp"
+    """
+    try:
+        image_bytes = await file.read()
+        return await _upload_bytes_to_kiosk(image_bytes, filename or file.filename, bucket)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"File upload failed: {e}")
+
+
+async def _upload_bytes_to_kiosk(image_bytes: bytes, filename: Optional[str], bucket: str) -> UploadResponse:
+    """Shared upload logic for both base64 and multipart endpoints."""
+    from PIL import Image as PILImage
+    from io import BytesIO
+    import uuid
+
+    img = PILImage.open(BytesIO(image_bytes))
+    fmt = (img.format or "PNG").lower()
+    mime = FORMAT_MIMETYPES.get(fmt, "image/png")
+    ext = fmt if fmt != "jpeg" else "jpg"
+
+    final_name = filename or f"upload-{uuid.uuid4().hex[:8]}.{ext}"
+
+    url = await upload_to_kiosk(image_bytes, final_name, mime, bucket)
+    if not url:
+        raise HTTPException(status_code=500, detail="Kiosk not configured (KIOSK_UPLOAD_URL / KIOSK_API_KEY)")
+
+    return UploadResponse(url=url, filename=final_name, bucket=bucket)
 
 
 # ---------------------------------------------------------------------------
