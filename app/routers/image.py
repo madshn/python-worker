@@ -382,8 +382,8 @@ async def create_thumbnail(request: ThumbnailRequest) -> ImageOutput:
 # ---------------------------------------------------------------------------
 
 class MontageRequest(BaseModel):
-    images: Optional[List[str]] = Field(None, min_length=2, max_length=25, description="Array of base64-encoded images")
-    image_urls: Optional[List[str]] = Field(None, min_length=2, max_length=25, description="Array of image URLs")
+    images: Optional[List[str]] = Field(None, description="Array of base64-encoded images")
+    image_urls: Optional[object] = Field(None, description="Array of image URLs (accepts JSON array or stringified JSON)")
     columns: Optional[int] = Field(None, ge=1, le=10)
     spacing: int = Field(default=10, ge=0, le=100)
     background_color: str = Field(default="#FFFFFF")
@@ -400,17 +400,32 @@ async def create_montage(request: MontageRequest) -> ImageOutput:
     from PIL import Image as PILImage, ImageDraw, ImageFont
     from io import BytesIO
     import base64
+    import json
     import math
 
     try:
-        source_list = request.image_urls or request.images
+        # Flexibly parse image_urls — handles string, list, or stringified JSON
+        url_list = None
+        if request.image_urls is not None:
+            if isinstance(request.image_urls, list):
+                url_list = request.image_urls
+            elif isinstance(request.image_urls, str):
+                try:
+                    parsed = json.loads(request.image_urls)
+                    if isinstance(parsed, list):
+                        url_list = parsed
+                except (json.JSONDecodeError, TypeError):
+                    url_list = [u.strip() for u in request.image_urls.split(",") if u.strip()]
+
+        source_list = url_list or request.images
         if not source_list or len(source_list) < 2:
             raise HTTPException(status_code=400, detail="Provide at least 2 images via images or image_urls")
 
         pil_images = []
+        is_urls = url_list is not None
         for i, src in enumerate(source_list):
             try:
-                if request.image_urls:
+                if is_urls:
                     img = await resolve_image(image_url=src)
                 else:
                     img = await resolve_image(image_base64=src)

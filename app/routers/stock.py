@@ -46,8 +46,7 @@ class SearchRequest(BaseModel):
     )
     orientation: Optional[str] = Field(
         None,
-        pattern="^(landscape|portrait|square)$",
-        description="Filter by orientation",
+        description="Filter by orientation: landscape, portrait, square. Omit for all.",
     )
     color: Optional[str] = Field(
         None,
@@ -73,6 +72,22 @@ class SearchResponse(BaseModel):
 @router.post("/search", response_model=SearchResponse)
 async def search_stock(request: SearchRequest) -> SearchResponse:
     """Search stock photo libraries. Returns URLs, dimensions, and attribution."""
+    # Normalize empty strings to None
+    if request.orientation is not None and request.orientation.strip() == "":
+        request.orientation = None
+    if request.color is not None and request.color.strip() == "":
+        request.color = None
+    if request.category is not None and request.category.strip() == "":
+        request.category = None
+
+    # Validate orientation if provided
+    valid_orientations = {"landscape", "portrait", "square"}
+    if request.orientation and request.orientation not in valid_orientations:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid orientation '{request.orientation}'. Valid: {', '.join(sorted(valid_orientations))}",
+        )
+
     results: List[StockPhoto] = []
     sources_queried: List[str] = []
     total = 0

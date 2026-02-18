@@ -38,8 +38,7 @@ class GenerateImageRequest(BaseModel):
     )
     aspect_ratio: str = Field(
         default="1:1",
-        pattern="^(1:1|16:9|9:16|4:3|3:4|3:2|2:3)$",
-        description="Aspect ratio (support varies by model)",
+        description="Aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3",
     )
     size: str = Field(
         default="1024x1024",
@@ -66,9 +65,17 @@ class GenerateImageResponse(BaseModel):
     height: Optional[int] = None
 
 
+VALID_ASPECT_RATIOS = {"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+
+
 @router.post("/image", response_model=GenerateImageResponse)
 async def generate_image(request: GenerateImageRequest) -> GenerateImageResponse:
     """Generate an image from text using Gemini, DALL-E 3, or GPT-Image-1."""
+    if request.aspect_ratio not in VALID_ASPECT_RATIOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported aspect ratio '{request.aspect_ratio}'. Valid: {', '.join(sorted(VALID_ASPECT_RATIOS))}",
+        )
     if request.model == "gemini":
         return await _generate_gemini(request)
     elif request.model == "dall-e-3":
@@ -84,65 +91,70 @@ async def _generate_gemini(req: GenerateImageRequest) -> GenerateImageResponse:
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
+    # Try models in order: gemini-2.5-flash-image (current), fallback to gemini-2.0-flash
+    models = ["gemini-2.5-flash-image", "gemini-2.0-flash"]
 
-    payload = {
-        "contents": [{"parts": [{"text": req.prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
-    }
+    for model_name in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(url, json=payload)
-        if resp.status_code != 200:
-            detail = resp.text[:500]
-            raise HTTPException(status_code=502, detail=f"Gemini API error: {detail}")
+        payload = {
+            "contents": [{"parts": [{"text": req.prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+            },
+        }
 
-        data = resp.json()
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 404:
+                continue  # Try next model
+            if resp.status_code != 200:
+                detail = resp.text[:500]
+                raise HTTPException(status_code=502, detail=f"Gemini API error ({model_name}): {detail}")
 
-    # Extract image from response
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise HTTPException(status_code=502, detail="Gemini returned no candidates")
+            data = resp.json()
 
-    parts = candidates[0].get("content", {}).get("parts", [])
-    image_b64 = None
-    revised_prompt = None
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise HTTPException(status_code=502, detail=f"Gemini ({model_name}) returned no candidates")
 
-    for part in parts:
-        if "inlineData" in part:
-            image_b64 = part["inlineData"]["data"]
-        elif "text" in part:
-            revised_prompt = part["text"]
+        parts = candidates[0].get("content", {}).get("parts", [])
+        image_b64 = None
+        revised_prompt = None
 
-    if not image_b64:
-        raise HTTPException(status_code=502, detail="Gemini returned no image data")
+        for part in parts:
+            if "inlineData" in part:
+                image_b64 = part["inlineData"]["data"]
+            elif "text" in part:
+                revised_prompt = part["text"]
 
-    image_bytes = base64.b64decode(image_b64)
+        if not image_b64:
+            raise HTTPException(status_code=502, detail=f"Gemini ({model_name}) returned no image data")
 
-    # Get dimensions
-    from PIL import Image as PILImage
-    img = PILImage.open(BytesIO(image_bytes))
+        image_bytes = base64.b64decode(image_b64)
 
-    kiosk_url = await upload_to_kiosk(image_bytes, "generated-gemini.png", "image/png")
+        from PIL import Image as PILImage
+        img = PILImage.open(BytesIO(image_bytes))
 
-    return GenerateImageResponse(
-        url=kiosk_url,
-        image_base64=image_b64 if not kiosk_url else None,
-        model="gemini-2.0-flash",
-        revised_prompt=revised_prompt,
-        width=img.width,
-        height=img.height,
-    )
+        kiosk_url = await upload_to_kiosk(image_bytes, "generated-gemini.png", "image/png")
+
+        return GenerateImageResponse(
+            url=kiosk_url,
+            image_base64=image_b64 if not kiosk_url else None,
+            model=model_name,
+            revised_prompt=revised_prompt,
+            width=img.width,
+            height=img.height,
+        )
+
+    raise HTTPException(status_code=502, detail="All Gemini models returned 404. Models tried: " + ", ".join(models))
 
 
 async def _generate_dalle3(req: GenerateImageRequest) -> GenerateImageResponse:
-    """Generate via OpenAI DALL-E 3."""
+    """Generate via OpenAI DALL-E 3. Falls back to gpt-image-1 if DALL-E 3 scope is missing."""
     if not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
 
-    # Map aspect ratio to DALL-E sizes
     size_map = {
         "1:1": "1024x1024",
         "16:9": "1792x1024",
@@ -174,6 +186,15 @@ async def _generate_dalle3(req: GenerateImageRequest) -> GenerateImageResponse:
             json=payload,
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
         )
+
+        # If dall-e-3 fails with permissions, fall back to gpt-image-1
+        if resp.status_code == 403 or (resp.status_code != 200 and "insufficient permissions" in resp.text.lower()):
+            req_copy = req.model_copy()
+            req_copy.model = "gpt-image-1"
+            result = await _generate_gpt_image(req_copy)
+            result.model = "gpt-image-1 (dall-e-3 unavailable — API key lacks model.request scope)"
+            return result
+
         if resp.status_code != 200:
             detail = resp.text[:500]
             raise HTTPException(status_code=502, detail=f"DALL-E API error: {detail}")
@@ -300,49 +321,57 @@ async def edit_image(request: EditImageRequest) -> EditImageResponse:
     if source_img.format:
         mime = FORMAT_MIMETYPES.get(source_img.format.lower(), "image/png")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
+    models = ["gemini-2.5-flash-image", "gemini-2.0-flash"]
 
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": request.instruction},
-                {"inlineData": {"mimeType": mime, "data": source_b64}},
-            ]
-        }],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
-    }
+    for model_name in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(url, json=payload)
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Gemini edit error: {resp.text[:500]}")
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": request.instruction},
+                    {"inlineData": {"mimeType": mime, "data": source_b64}},
+                ]
+            }],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+            },
+        }
 
-        data = resp.json()
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 404:
+                continue
+            if resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Gemini edit error ({model_name}): {resp.text[:500]}")
 
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise HTTPException(status_code=502, detail="Gemini returned no candidates")
+            data = resp.json()
 
-    parts = candidates[0].get("content", {}).get("parts", [])
-    image_b64 = None
-    for part in parts:
-        if "inlineData" in part:
-            image_b64 = part["inlineData"]["data"]
-            break
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise HTTPException(status_code=502, detail=f"Gemini ({model_name}) returned no candidates")
 
-    if not image_b64:
-        raise HTTPException(status_code=502, detail="Gemini edit returned no image")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        image_b64 = None
+        for part in parts:
+            if "inlineData" in part:
+                image_b64 = part["inlineData"]["data"]
+                break
 
-    image_bytes = base64.b64decode(image_b64)
-    result_img = PILImage.open(BytesIO(image_bytes))
+        if not image_b64:
+            raise HTTPException(status_code=502, detail=f"Gemini edit ({model_name}) returned no image")
 
-    kiosk_url = await upload_to_kiosk(image_bytes, "edited-gemini.png", "image/png")
+        image_bytes = base64.b64decode(image_b64)
+        result_img = PILImage.open(BytesIO(image_bytes))
 
-    return EditImageResponse(
-        url=kiosk_url,
-        image_base64=image_b64 if not kiosk_url else None,
-        width=result_img.width,
-        height=result_img.height,
-    )
+        kiosk_url = await upload_to_kiosk(image_bytes, "edited-gemini.png", "image/png")
+
+        return EditImageResponse(
+            url=kiosk_url,
+            image_base64=image_b64 if not kiosk_url else None,
+            model=model_name,
+            width=result_img.width,
+            height=result_img.height,
+        )
+
+    raise HTTPException(status_code=502, detail="All Gemini models returned 404. Models tried: " + ", ".join(models))
