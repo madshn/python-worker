@@ -1,14 +1,15 @@
 # Python Worker
 
 **Location:** `~/ops/python-worker/`
-**Role:** General-purpose Python execution service for tasks that n8n can't handle natively.
+**Role:** Image processing, AI generation, and stock photo search service for n8n and Cloud Associates.
 **URL:** https://python-worker-0h8m.onrender.com
+**Version:** 2.0.0
 
 ---
 
 ## Purpose
 
-This service provides Python capabilities (Pillow, document generation) to n8n workflows via HTTP API. Primary consumer is n8n; agents doing local work should use local tools (ImageMagick, Pillow directly, etc.).
+Backend service for the `image-tools` MCP service package. Provides image processing (Pillow), AI generation (Gemini, DALL-E, GPT-Image-1), and stock photo search (Pexels, Pixabay) via HTTP API. Primary consumers: n8n `image-tools` workflow (`hLrdB9z3GjcZmH1K`), Cloud Associates.
 
 ---
 
@@ -18,91 +19,73 @@ Query `/capabilities` for machine-readable discovery.
 
 ### Image Processing (Pillow 11.0)
 
-| Endpoint | Description | Use Cases |
-|----------|-------------|-----------|
-| `POST /image/grid-overlay` | Add reference grid overlay for AI vision | UX screenshot review, spatial coordinate analysis |
-| `POST /image/resize` | Resize with aspect ratio preservation | Prepare images for LLM context limits, standardize dimensions |
-| `POST /image/montage` | Combine multiple images into grid layout | Character reference sheets, before/after comparisons, multi-image LLM context |
+| Endpoint | Description |
+|----------|-------------|
+| `POST /image/info` | Get image metadata (dimensions, mode, format) |
+| `POST /image/resize` | Resize with aspect ratio preservation |
+| `POST /image/crop` | Crop region by coordinates |
+| `POST /image/rotate` | Rotate by arbitrary angle |
+| `POST /image/flip` | Flip horizontal or vertical |
+| `POST /image/convert` | Convert format (PNG, JPEG, WebP, BMP, TIFF, GIF) |
+| `POST /image/compress` | Compress/optimize for web (quality, downscale, strip EXIF) |
+| `POST /image/watermark` | Add text watermark (position, opacity, color) |
+| `POST /image/adjust` | Adjust brightness/contrast/saturation/sharpness |
+| `POST /image/thumbnail` | Generate optimized thumbnail |
+| `POST /image/montage` | Combine 2-25 images into grid layout |
+| `POST /image/grid-overlay` | Add reference grid for AI vision analysis |
+
+### AI Image Generation
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /generate/image` | Text-to-image (Gemini, DALL-E 3, GPT-Image-1) |
+| `POST /generate/edit` | Edit image with natural language instruction (Gemini) |
+
+### Stock Photo Search
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /stock/search` | Search Pexels and/or Pixabay |
 
 ### Planned (Phase 2)
 
 | Capability | Packages | Status |
 |------------|----------|--------|
-| Markdown → PDF | weasyprint | Planned |
-| Markdown → DOCX | python-docx, mistune | Planned |
-| Markdown → PPTX | python-pptx | Planned |
+| Markdown to PDF | weasyprint | Planned |
+| Markdown to DOCX | python-docx, mistune | Planned |
 
 ---
 
-## Endpoint Details
+## Input Flexibility
 
-### POST /image/grid-overlay
+All processing endpoints accept **either**:
+- `image_base64` — base64-encoded image data
+- `image_url` — URL to download image from
 
-Add a chess-style coordinate grid (A-I, 1-9) to images for spatial references in vision LLM analysis.
+When Kiosk is configured (`KIOSK_UPLOAD_URL`), results are auto-uploaded and a URL is returned. Otherwise, base64 fallback.
 
-```json
-{
-  "image_base64": "...",
-  "grid_size": 9,
-  "alpha": 0.3,
-  "include_prompt": true
-}
-```
+---
 
-### POST /image/resize
+## Environment Variables
 
-```json
-{
-  "image_base64": "...",
-  "max_dimension": 1024,
-  "output_format": "jpeg",
-  "quality": 85
-}
-```
-
-### POST /image/montage
-
-Combine 2-25 images into a grid layout. Auto-calculates grid dimensions if columns not specified.
-
-```json
-{
-  "images": ["base64...", "base64...", "base64..."],
-  "columns": 3,
-  "spacing": 10,
-  "labels": ["Character A", "Character B", "Character C"],
-  "max_cell_width": 512
-}
-```
-
-Response includes `grid` field (e.g., "3x2") for reference.
+| Variable | Required For | Description |
+|----------|-------------|-------------|
+| `GEMINI_API_KEY` | Generation | Google Gemini API key |
+| `OPENAI_API_KEY` | Generation | OpenAI API key (DALL-E 3, GPT-Image-1) |
+| `PEXELS_API_KEY` | Stock search | Pexels API key |
+| `PIXABAY_API_KEY` | Stock search | Pixabay API key |
+| `KIOSK_UPLOAD_URL` | Auto-upload | Kiosk upload endpoint |
+| `KIOSK_API_KEY` | Auto-upload | Kiosk auth key |
 
 ---
 
 ## n8n Integration
 
-Use HTTP Request node:
-- **Method:** POST
-- **URL:** `https://python-worker-0h8m.onrender.com/image/montage`
-- **Body:** JSON with base64-encoded images
-- **Headers:** `Content-Type: application/json`
+The `image-tools` n8n workflow (`hLrdB9z3GjcZmH1K`) is the MCP gateway to this service. Each n8n tool node maps 1:1 to a python-worker endpoint via HTTP Request.
 
-**Note:** Cold starts may take 30-60s on free tier. For latency-sensitive workflows, ping `/health` first.
+**MCP path:** `https://flow.rightaim.ai/mcp/image-tools`
 
----
-
-## Requesting New Capabilities
-
-1. **Check `/capabilities`** — May already exist
-2. **Create GitHub issue** on `madshn/python-worker`:
-   ```
-   Capability Request: [name]
-
-   Use case: [what you need]
-   Input: [expected format]
-   Output: [expected format]
-   Packages needed: [if known]
-   ```
-3. Bob handles implementation, Mira monitors deployment
+**Cold starts:** May take 30-60s on Starter tier. For latency-sensitive workflows, ping `/health` first.
 
 ---
 
@@ -111,11 +94,12 @@ Use HTTP Request node:
 ```
 FastAPI app (app/main.py)
 ├── routers/
-│   ├── image.py    # /image/* endpoints
-│   └── doc.py      # /doc/* endpoints (Phase 2)
+│   ├── image.py      # /image/* processing endpoints
+│   ├── generate.py   # /generate/* AI generation endpoints
+│   └── stock.py      # /stock/* search endpoints
 └── tasks/
     ├── grid_overlay.py   # Grid overlay logic
-    └── doc_convert.py    # Document conversion (Phase 2)
+    └── image_utils.py    # Shared: download, upload, convert utilities
 ```
 
 ---
@@ -123,13 +107,13 @@ FastAPI app (app/main.py)
 ## Local Development
 
 ```bash
-# Build
 docker build -t python-worker .
+docker run -p 8000:8000 \
+  -e GEMINI_API_KEY=... \
+  -e OPENAI_API_KEY=... \
+  -e PEXELS_API_KEY=... \
+  python-worker
 
-# Run
-docker run -p 8000:8000 python-worker
-
-# Test
 curl http://localhost:8000/health
 curl http://localhost:8000/capabilities
 ```
@@ -151,6 +135,7 @@ curl http://localhost:8000/capabilities
 
 ## Related
 
-- **Mira:** `~/ops/mira/` — Runtime operator, monitors this service
-- **Aston:** `~/ops/aston/` — Origin of grid_overlay.py script
-- **n8n:** Primary consumer via HTTP Request nodes
+- **Bob:** `~/ops/bob/` — Factory manager, owns this service
+- **Mira:** `~/ops/mira/` — Runtime operator, monitors deployment
+- **n8n:** `image-tools` workflow is the MCP gateway
+- **Kiosk:** Upload destination for processed/generated images
