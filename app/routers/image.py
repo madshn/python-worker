@@ -8,7 +8,7 @@ When Kiosk is configured, results are uploaded and a URL is returned.
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from app.tasks.grid_overlay import process_base64, get_ux_review_prompt, GRID_PROMPT_PREFIX
 from app.tasks.image_utils import (
@@ -541,7 +541,7 @@ async def create_thumbnail(request: ThumbnailRequest) -> ImageOutput:
 
 class MontageRequest(BaseModel):
     images: Optional[List[str]] = Field(None, description="Array of base64-encoded images")
-    image_urls: Optional[object] = Field(None, description="Array of image URLs (accepts JSON array or stringified JSON)")
+    image_urls: Optional[Any] = Field(None, description="Array of image URLs — accepts list, stringified JSON, or comma-separated")
     columns: Optional[int] = Field(None, ge=1, le=10)
     spacing: int = Field(default=10, ge=0, le=100)
     background_color: str = Field(default="#FFFFFF")
@@ -708,3 +708,127 @@ async def grid_overlay(request: GridOverlayRequest) -> GridOverlayResponse:
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Grid overlay failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# /image/svg-invert — invert SVG colors
+# ---------------------------------------------------------------------------
+
+class SvgInvertRequest(BaseModel):
+    svg_url: Optional[str] = Field(None, description="URL to SVG file")
+    svg_content: Optional[str] = Field(None, description="Raw SVG string")
+
+
+class SvgResponse(BaseModel):
+    url: Optional[str] = None
+    svg: Optional[str] = None
+    size_bytes: int
+
+
+@router.post("/svg-invert", response_model=SvgResponse)
+async def svg_invert(request: SvgInvertRequest) -> SvgResponse:
+    """Invert all colors in an SVG (dark↔light). Useful for making light logos work on dark backgrounds."""
+    import re
+    import uuid
+    from app.tasks.image_utils import download_image
+
+    try:
+        if request.svg_url:
+            raw = await download_image(request.svg_url)
+            svg_str = raw.decode("utf-8")
+        elif request.svg_content:
+            svg_str = request.svg_content
+        else:
+            raise HTTPException(status_code=400, detail="Provide svg_url or svg_content")
+
+        def invert_hex(match):
+            hex_color = match.group(1)
+            if len(hex_color) == 3:
+                hex_color = "".join(c * 2 for c in hex_color)
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            return f"#{255 - r:02x}{255 - g:02x}{255 - b:02x}"
+
+        inverted = re.sub(r"#([0-9a-fA-F]{3,6})", invert_hex, svg_str)
+
+        def invert_rgb(match):
+            r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return f"rgb({255 - r},{255 - g},{255 - b})"
+
+        inverted = re.sub(r"rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", invert_rgb, inverted)
+
+        svg_bytes = inverted.encode("utf-8")
+        kiosk_url = await upload_to_kiosk(svg_bytes, f"inverted-{uuid.uuid4().hex[:8]}.svg", "image/svg+xml")
+
+        return SvgResponse(
+            url=kiosk_url,
+            svg=inverted if not kiosk_url else None,
+            size_bytes=len(svg_bytes),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"SVG invert failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# /image/svg-to-png — render SVG to raster
+# ---------------------------------------------------------------------------
+
+class SvgToPngRequest(BaseModel):
+    svg_url: Optional[str] = Field(None, description="URL to SVG file")
+    svg_content: Optional[str] = Field(None, description="Raw SVG string")
+    width: Optional[int] = Field(None, ge=1, le=8192, description="Output width (preserves aspect if only one dimension)")
+    height: Optional[int] = Field(None, ge=1, le=8192, description="Output height")
+    scale: float = Field(default=1.0, ge=0.1, le=10.0, description="Scale factor (2.0 = 2x resolution)")
+    output_format: str = Field(default="png", pattern="^(png|jpeg|jpg)$")
+    quality: int = Field(default=85, ge=1, le=100)
+    background_color: Optional[str] = Field(None, description="Background color hex (default: transparent for PNG, white for JPEG)")
+
+
+@router.post("/svg-to-png", response_model=ImageOutput)
+async def svg_to_png(request: SvgToPngRequest) -> ImageOutput:
+    """Render an SVG to PNG or JPEG at specified resolution."""
+    import cairosvg
+    import uuid
+    from io import BytesIO
+    from PIL import Image as PILImage
+    from app.tasks.image_utils import download_image
+
+    try:
+        if request.svg_url:
+            raw = await download_image(request.svg_url)
+            svg_bytes = raw
+        elif request.svg_content:
+            svg_bytes = request.svg_content.encode("utf-8")
+        else:
+            raise HTTPException(status_code=400, detail="Provide svg_url or svg_content")
+
+        kwargs = {}
+        if request.width:
+            kwargs["output_width"] = request.width
+        if request.height:
+            kwargs["output_height"] = request.height
+        if request.scale != 1.0:
+            kwargs["scale"] = request.scale
+        if request.background_color:
+            kwargs["background_color"] = request.background_color
+
+        png_bytes = cairosvg.svg2png(bytestring=svg_bytes, **kwargs)
+
+        img = PILImage.open(BytesIO(png_bytes))
+
+        # Convert to JPEG if requested
+        if request.output_format.lower() in ("jpeg", "jpg"):
+            bg_color = request.background_color or "#FFFFFF"
+            hex_c = bg_color.lstrip("#")
+            bg = tuple(int(hex_c[i:i+2], 16) for i in (0, 2, 4))
+            if img.mode == "RGBA":
+                background = PILImage.new("RGB", img.size, bg)
+                background.paste(img, mask=img.split()[3])
+                img = background
+
+        return ImageOutput(**await process_and_respond(img, request.output_format, request.quality, f"svg-render-{uuid.uuid4().hex[:8]}"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"SVG to PNG failed: {e}")
