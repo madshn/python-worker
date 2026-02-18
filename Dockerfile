@@ -2,10 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps for Pillow and fonts
+# Install system deps for Pillow, CairoSVG, and fonts
 RUN apt-get update && apt-get install -y \
     libpng-dev \
     libjpeg-dev \
+    libcairo2 \
+    libgdk-pixbuf2.0-0 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
