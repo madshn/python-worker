@@ -14,14 +14,63 @@ from app.tasks.grid_overlay import process_base64, get_ux_review_prompt, GRID_PR
 from app.tasks.image_utils import (
     resolve_image,
     resolve_image_bytes,
+    decode_base64_image,
     image_to_base64,
     image_to_bytes,
     get_image_info,
     process_and_respond,
+    upload_to_kiosk,
     FORMAT_MIMETYPES,
 )
 
 router = APIRouter(prefix="/image", tags=["image"])
+
+
+# ---------------------------------------------------------------------------
+# /image/upload — upload base64 image to Kiosk, return URL
+# ---------------------------------------------------------------------------
+
+class UploadRequest(BaseModel):
+    image_base64: str = Field(..., description="Base64-encoded image data")
+    filename: Optional[str] = Field(None, description="Desired filename (auto-generated if omitted)")
+    bucket: str = Field(default="temp", pattern="^(temp|public|restricted)$", description="Kiosk bucket: temp (24h), public (permanent), restricted")
+
+
+class UploadResponse(BaseModel):
+    url: str = Field(description="Kiosk URL for the uploaded image")
+    filename: str
+    bucket: str
+
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_image(request: UploadRequest) -> UploadResponse:
+    """
+    Upload a base64-encoded image to Kiosk and return the URL.
+    Use this to make local files available to other image-tools operations.
+    """
+    try:
+        image_bytes = decode_base64_image(request.image_base64)
+
+        # Detect format for mime type
+        from PIL import Image as PILImage
+        from io import BytesIO
+        img = PILImage.open(BytesIO(image_bytes))
+        fmt = (img.format or "PNG").lower()
+        mime = FORMAT_MIMETYPES.get(fmt, "image/png")
+        ext = fmt if fmt != "jpeg" else "jpg"
+
+        import uuid
+        filename = request.filename or f"upload-{uuid.uuid4().hex[:8]}.{ext}"
+
+        url = await upload_to_kiosk(image_bytes, filename, mime, request.bucket)
+        if not url:
+            raise HTTPException(status_code=500, detail="Kiosk not configured (KIOSK_UPLOAD_URL / KIOSK_API_KEY)")
+
+        return UploadResponse(url=url, filename=filename, bucket=request.bucket)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Upload failed: {e}")
 
 
 # ---------------------------------------------------------------------------
