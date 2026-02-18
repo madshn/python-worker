@@ -33,8 +33,8 @@ class GenerateImageRequest(BaseModel):
     prompt: str = Field(..., max_length=4000, description="Text description of the image to generate")
     model: str = Field(
         default="gemini",
-        pattern="^(gemini|dall-e-3|gpt-image-1)$",
-        description="Model to use: gemini, dall-e-3, or gpt-image-1",
+        pattern="^(gemini|gemini-pro|dall-e-3|gpt-image-1)$",
+        description="Model: gemini (fast, free), gemini-pro (high quality, free), dall-e-3 (artistic), gpt-image-1 (precise)",
     )
     aspect_ratio: str = Field(
         default="1:1",
@@ -78,6 +78,8 @@ async def generate_image(request: GenerateImageRequest) -> GenerateImageResponse
         )
     if request.model == "gemini":
         return await _generate_gemini(request)
+    elif request.model == "gemini-pro":
+        return await _generate_gemini(request, pro=True)
     elif request.model == "dall-e-3":
         return await _generate_dalle3(request)
     elif request.model == "gpt-image-1":
@@ -86,13 +88,15 @@ async def generate_image(request: GenerateImageRequest) -> GenerateImageResponse
         raise HTTPException(status_code=400, detail=f"Unknown model: {request.model}")
 
 
-async def _generate_gemini(req: GenerateImageRequest) -> GenerateImageResponse:
-    """Generate via Gemini 2.0 Flash (native image generation)."""
+async def _generate_gemini(req: GenerateImageRequest, pro: bool = False) -> GenerateImageResponse:
+    """Generate via Gemini. Flash (fast) or Pro (high quality text/detail)."""
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    # Try models in order: gemini-2.5-flash-image (current), fallback to gemini-2.0-flash
-    models = ["gemini-2.5-flash-image", "gemini-2.0-flash"]
+    if pro:
+        models = ["gemini-3-pro-image-preview", "gemini-2.5-flash-image"]
+    else:
+        models = ["gemini-2.5-flash-image", "gemini-2.0-flash"]
 
     for model_name in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
