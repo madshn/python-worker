@@ -1,5 +1,8 @@
 {
   "workbench.colorTheme": "Nord",
+  "workbench.startupEditor": "none",
+  "terminal.integrated.defaultLocation": "editor",
+  "terminal.integrated.tabs.title": "${sequence}",
   "githubIssues.queries": [
     { "label": "All Open", "query": "is:open repo:${owner}/${repository}" },
     { "label": "My Issues", "query": "is:open assignee:@me repo:${owner}/${repository}" },
