@@ -1,3 +1,8 @@
 {
-  "workbench.colorTheme": "Nord"
+  "workbench.colorTheme": "Nord",
+  "githubIssues.queries": [
+    { "label": "All Open", "query": "is:open repo:${owner}/${repository}" },
+    { "label": "My Issues", "query": "is:open assignee:@me repo:${owner}/${repository}" },
+    { "label": "Created By Me", "query": "is:open author:@me repo:${owner}/${repository}" }
+  ]
 }
