@@ -124,7 +124,7 @@ async def upload_to_kiosk(
     bucket: str = "temp",
 ) -> Optional[str]:
     """
-    Upload image bytes to Kiosk via the kiosk-stock n8n webhook.
+    Upload image bytes to Kiosk via the admin upload API.
     Sends base64-encoded content as JSON. Returns the public URL.
     Returns None if Kiosk is not configured.
     """

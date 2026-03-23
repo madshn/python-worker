@@ -2,9 +2,10 @@
 Python Worker Service — Image processing, AI generation, and stock photo search.
 """
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import require_auth
 from app.routers import image, generate, stock
 
 app = FastAPI(
@@ -23,10 +24,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(image.router)
-app.include_router(generate.router)
-app.include_router(stock.router)
+# Include routers — all require Bearer auth
+app.include_router(image.router, dependencies=[Depends(require_auth)])
+app.include_router(generate.router, dependencies=[Depends(require_auth)])
+app.include_router(stock.router, dependencies=[Depends(require_auth)])
 
 
 @app.get("/")
@@ -75,7 +76,9 @@ async def capabilities():
                 {"path": "/stock/search", "method": "POST", "description": "Search stock photos (Pexels, Pixabay)"},
             ],
         },
+        "auth": "Bearer token via API_KEY env var — all /image, /generate, /stock endpoints",
         "env_vars": {
+            "required": ["API_KEY"],
             "required_for_generation": ["GEMINI_API_KEY", "OPENAI_API_KEY"],
             "required_for_stock": ["PEXELS_API_KEY", "PIXABAY_API_KEY"],
             "optional": ["KIOSK_UPLOAD_URL", "KIOSK_API_KEY"],

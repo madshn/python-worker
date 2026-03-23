@@ -15,7 +15,6 @@
       "NotebookEdit(./**)",
       "mcp__*",
       "mcp__associates-tools__*",
-      "mcp__cloud-associates__*",
       "mcp__plugin_Notion_notion__*",
       "mcp__plugin_context7_context7__*"
     ],

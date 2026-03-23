@@ -70,11 +70,12 @@ When Kiosk is configured (`KIOSK_UPLOAD_URL`), results are auto-uploaded and a U
 
 | Variable | Required For | Description |
 |----------|-------------|-------------|
+| `API_KEY` | **All endpoints** | Bearer token for request authentication |
 | `GEMINI_API_KEY` | Generation | Google Gemini API key |
 | `OPENAI_API_KEY` | Generation | OpenAI API key (DALL-E 3, GPT-Image-1) |
 | `PEXELS_API_KEY` | Stock search | Pexels API key |
 | `PIXABAY_API_KEY` | Stock search | Pixabay API key |
-| `KIOSK_UPLOAD_URL` | Auto-upload | Kiosk upload endpoint |
+| `KIOSK_UPLOAD_URL` | Auto-upload | Kiosk admin upload endpoint (`https://kiosk.rightaim.ai/admin/upload`) |
 | `KIOSK_API_KEY` | Auto-upload | Kiosk auth key |
 
 ---
