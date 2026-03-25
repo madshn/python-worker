@@ -1,16 +1,11 @@
 {
   "mcpServers": {
     "associates-tools": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "supergateway",
-        "--streamableHttp",
-        "https://flow.rightaim.ai/mcp/associates-tools",
-        "--header",
-        "authorization:Bearer 36859cd29a1f200f59977239ae8c15f4374bff435952b2e0fd56797cccdf0c22"
-      ]
+      "type": "http",
+      "url": "https://flow.rightaim.ai/mcp/associates-tools",
+      "headers": {
+        "Authorization": "Bearer ${ASSOCIATES_SHARED_TOKEN}"
+      }
     }
   }
 }
