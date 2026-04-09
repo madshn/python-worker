@@ -4,7 +4,7 @@ uvicorn[standard]==0.42.0
 python-multipart==0.0.22
 
 # Image processing
-pillow==11.0.0
+pillow==12.2.0
 vtracer==0.6.15
 cairosvg==2.9.0
 
