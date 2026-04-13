@@ -39,5 +39,18 @@
   },
   "enabledPlugins": {
     "kiosk@mira-plugins": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/madsnissen/test-installs/vps-cah-simulation/bin/hooks/session-start-register.sh"
+          }
+        ]
+      }
+    ]
   }
 }

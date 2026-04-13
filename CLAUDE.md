@@ -17,7 +17,7 @@ Backend service for the `image-tools` MCP service package. Provides image proces
 
 Query `/capabilities` for machine-readable discovery.
 
-### Image Processing (Pillow 11.0)
+### Image Processing (Pillow 12.1)
 
 | Endpoint | Description |
 |----------|-------------|
