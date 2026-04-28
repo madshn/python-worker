@@ -50,6 +50,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/madsnissen/ops/python-worker/.claude/hooks/repotic-session-stop.sh"
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Claude SessionStart hook — registers session in team_sessions.
+# Codex Stop hook — marks session completed in team_sessions.
 # Thin wrapper; see register.sh for actual logic.
 set -uo pipefail
-REPOTIC_RUNTIME="claude"
+REPOTIC_RUNTIME="codex"
 # shellcheck source=register.sh
 source "$(dirname "$0")/register.sh"
-repotic_run_start
+repotic_run_stop
 exit 0
